@@ -1,0 +1,103 @@
+import cv2
+import numpy as np
+import math
+
+def main() -> None:
+    """Capture camera feed and detect QR codes."""
+    cap = cv2.VideoCapture(0)
+
+    if not cap.isOpened():
+        print("Error: Could not open camera.")
+        return
+
+    # Set camera properties for better performance
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    cap.set(cv2.CAP_PROP_FPS, 30)
+
+    # Create QR code detector
+    qr_detector = cv2.QRCodeDetector()
+
+    # Known marker size (meters) and assumed horizontal FOV (degrees)
+    # If you have camera calibration, replace this logic with solvePnP for better accuracy.
+    marker_size_m = 0.05  # default: 5 cm QR code
+    assumed_fov_deg = 60.0  # typical webcam horizontal FOV; change if known
+
+    # Create a named window for better display control
+    cv2.namedWindow('QR Code Scanner', cv2.WINDOW_NORMAL)
+
+    print("Press 'q' to quit. Point camera at QR code to scan.")
+    detected_qr_codes = set()
+
+    try:
+        while True:
+            ret, frame = cap.read()
+
+            if not ret:
+                print("Error: Failed to capture frame.")
+                break
+
+            # Detect and decode QR code
+            retval, decoded_info, points, straight_qr = qr_detector.detectAndDecodeMulti(frame)
+
+            # Draw QR code boundaries and display decoded data
+            if retval:
+                for point, data in zip(points, decoded_info):
+                    if data:
+                        # Normalize point shape and convert to float
+                        pts = np.array(point, dtype=float).reshape(-1, 2)
+
+                        # Draw the QR code bounding box
+                        cv2.polylines(frame, [pts.astype(int)], True, (0, 255, 0), 2)
+
+                        # Compute center pixel of QR code
+                        center = pts.mean(axis=0)
+
+                        # Estimate pixel width of the QR (average of two opposite edges)
+                        w1 = np.linalg.norm(pts[0] - pts[1])
+                        w2 = np.linalg.norm(pts[2] - pts[3])
+                        pixel_width = (w1 + w2) / 2.0
+
+                        # Approximate focal length in pixels from assumed horizontal FOV
+                        frame_width = frame.shape[1]
+                        f_px = (frame_width / 2.0) / math.tan(math.radians(assumed_fov_deg) / 2.0)
+
+                        # Depth (Z) estimation using similar triangles: Z = f * real_width / pixel_width
+                        Z = (f_px * marker_size_m) / pixel_width if pixel_width > 0 else 0.0
+
+                        # Principal point assumed at image center
+                        cx = frame_width / 2.0
+                        cy = frame.shape[0] / 2.0
+
+                        # Convert image pixel coordinates to camera coordinates (meters)
+                        X = (center[0] - cx) * Z / f_px
+                        Y = (center[1] - cy) * Z / f_px
+
+                        # Display QR code data and estimated coordinates on frame
+                        label = f"{data}"
+                        coord_text = f"X={X:.3f}m Y={Y:.3f}m Z={Z:.3f}m"
+                        cv2.putText(frame, label, (int(center[0] - 50), int(center[1] - 20)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                        cv2.putText(frame, coord_text, (int(center[0] - 50), int(center[1] + 10)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+                        # Print to console and add to detected set
+                        if data not in detected_qr_codes:
+                            print(f"QR Code detected: {data} -> X={X:.3f}m Y={Y:.3f}m Z={Z:.3f}m")
+                            detected_qr_codes.add(data)
+
+            # Display the frame
+            cv2.imshow('QR Code Scanner', frame)
+
+            if cv2.waitKey(30) & 0xFF == ord('q'):
+                break
+
+    except KeyboardInterrupt:
+        print("\nQR code scanner stopped by user.")
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
