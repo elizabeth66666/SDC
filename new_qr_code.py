@@ -1,87 +1,122 @@
+from picamera2 import Picamera2
 import cv2
 import numpy as np
+import time
 
-# Load calibration data
-data = np.load("camera_calib.npz")
+# Chessboard dimensions
+chessboard_size = (7, 7)
 
-camera_matrix = data["camera_matrix"]
-dist_coeffs = data["dist_coeffs"]
+# Prepare object points
+objp = np.zeros((chessboard_size[0] * chessboard_size[1], 3),
+                np.float32)
+objp[:, :2] = np.mgrid[
+    0:chessboard_size[0],
+    0:chessboard_size[1]
+].T.reshape(-1, 2)
 
-# Real QR code size in meters (change if needed)
-qr_size = 0.05   # 5 cm
+objpoints = []
+imgpoints = []
 
-# 3D coordinates of QR corners in real world
-object_points = np.array([
-    [0, 0, 0],
-    [qr_size, 0, 0],
-    [qr_size, qr_size, 0],
-    [0, qr_size, 0]
-], dtype=np.float32)
+# Start Pi Camera
+picam2 = Picamera2()
 
-cap = cv2.VideoCapture(0)
-qr_detector = cv2.QRCodeDetector()
+config = picam2.create_preview_configuration(
+    main={"size": (1280, 720)}
+)
 
-print("Press Q to quit")
+picam2.configure(config)
+picam2.start()
+
+# Give camera time to settle
+time.sleep(2)
+
+print("Press SPACE to capture calibration image")
+print("Press Q to finish calibration")
+
+img_count = 0
 
 while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
 
-    h, w = frame.shape[:2]
+    # Capture frame from Pi Camera
+    frame = picam2.capture_array()
 
-    # Undistort frame
-    new_camera_matrix, roi = cv2.getOptimalNewCameraMatrix(
-        camera_matrix, dist_coeffs, (w, h), 1, (w, h)
+    # Picamera2 returns RGB
+    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+
+    ret_cb, corners = cv2.findChessboardCorners(
+        gray,
+        chessboard_size,
+        None
     )
 
-    frame = cv2.undistort(frame, camera_matrix, dist_coeffs, None, new_camera_matrix)
+    display = frame_bgr.copy()
 
-    # Detect QR codes
-    retval, decoded_info, points, _ = qr_detector.detectAndDecodeMulti(frame)
+    if ret_cb:
+        cv2.drawChessboardCorners(
+            display,
+            chessboard_size,
+            corners,
+            ret_cb
+        )
 
-    if retval:
-        for data, point in zip(decoded_info, points):
+    cv2.imshow("Calibration", display)
 
-            if data:
-                image_points = np.array(point, dtype=np.float32)
+    key = cv2.waitKey(1) & 0xFF
 
-                # Solve pose
-                success, rvec, tvec = cv2.solvePnP(
-                    object_points,
-                    image_points,
-                    camera_matrix,
-                    dist_coeffs
-                )
+    if key == ord(' '):
 
-                if success:
-                    distance = np.linalg.norm(tvec)
+        if ret_cb:
 
-                    pts = image_points.astype(int)
+            objpoints.append(objp)
+            imgpoints.append(corners)
 
-                    # Draw box
-                    cv2.polylines(frame, [pts], True, (0,255,0), 2)
+            cv2.imwrite(
+                f"calibration_{img_count}.jpg",
+                frame_bgr
+            )
 
-                    center = pts.mean(axis=0).astype(int)
+            img_count += 1
 
-                    text = f"{data} | Dist: {distance:.2f} m"
+            print(f"Captured calibration image {img_count}")
 
-                    cv2.putText(
-                        frame,
-                        text,
-                        (center[0], center[1]),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        (0,255,0),
-                        2
-                    )
+        else:
+            print("Chessboard not detected")
 
-                    print(f"{data} -> Distance: {distance:.2f} m")
-
-    cv2.imshow("QR Scanner", frame)
-
-    if cv2.waitKey(1) & 0xFF == ord("q"):
+    elif key == ord('q'):
         break
 
-cap.release()
+picam2.stop()
 cv2.destroyAllWindows()
+
+if len(objpoints) < 5:
+    print("Not enough calibration images.")
+    exit()
+
+print("Calculating calibration...")
+
+ret, camera_matrix, dist_coeffs, rvecs, tvecs = \
+    cv2.calibrateCamera(
+        objpoints,
+        imgpoints,
+        gray.shape[::-1],
+        None,
+        None
+    )
+
+np.savez(
+    "camera_calib.npz",
+    camera_matrix=camera_matrix,
+    dist_coeffs=dist_coeffs
+)
+
+print("Calibration saved to camera_calib.npz")
+
+print("\nCamera Matrix:")
+print(camera_matrix)
+
+print("\nDistortion Coefficients:")
+print(dist_coeffs)
+
+print("RMS:", ret)
