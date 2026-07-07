@@ -1,0 +1,159 @@
+from picamera2 import Picamera2
+import cv2
+import numpy as np
+import time
+import RPi.GPIO as GPIO
+import os
+
+
+class CameraSwitcher:
+    def __init__(self):
+        GPIO.setwarnings(False)
+        GPIO.setmode(GPIO.BOARD)
+
+        GPIO.setup(7, GPIO.OUT)
+        GPIO.setup(11, GPIO.OUT)
+        GPIO.setup(12, GPIO.OUT)
+
+    def select(self, camera):
+        if camera == "A":
+            os.system("i2cset -y 10 0x70 0x00 0x04")
+
+            GPIO.output(7, False)
+            GPIO.output(11, False)
+            GPIO.output(12, True)
+
+        elif camera == "B":
+            os.system("i2cset -y 10 0x70 0x00 0x05")
+
+            GPIO.output(7, True)
+            GPIO.output(11, False)
+            GPIO.output(12, True)
+
+        time.sleep(0.4)
+
+
+switcher = CameraSwitcher()
+
+
+def capture_frame(camera):
+    switcher.select(camera)
+
+    picam2 = Picamera2()
+    config = picam2.create_preview_configuration(
+        main={"size": (1280, 720)}
+    )
+
+    picam2.configure(config)
+    picam2.start()
+    time.sleep(0.7)
+
+    frame = picam2.capture_array()
+    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+    picam2.stop()
+
+    return frame_bgr
+
+
+def get_qr_centre(frame):
+    detector = cv2.QRCodeDetector()
+
+    data, points, _ = detector.detectAndDecode(frame)
+
+    if points is None:
+        return None, None
+
+    points = points[0]
+
+    centre_x = np.mean(points[:, 0])
+    centre_y = np.mean(points[:, 1])
+
+    centre = np.array([centre_x, centre_y], dtype=np.float32)
+
+    return centre, points
+
+
+def estimate_qr_distance():
+    stereo = np.load("stereo_calib.npz")
+
+    P1 = stereo["P1"]
+    P2 = stereo["P2"]
+
+    # Focal length in pixels after stereo rectification.
+    focal_length_px = P1[0, 0]
+
+    # Baseline in the same unit used during chessboard calibration.
+    # If square_size was in mm, baseline is in mm.
+    baseline = abs(P2[0, 3] / P2[0, 0])
+
+    print("Focal length:", focal_length_px)
+    print("Baseline:", baseline)
+
+    while True:
+        frame_A = capture_frame("A")
+        frame_B = capture_frame("B")
+
+        centre_A, points_A = get_qr_centre(frame_A)
+        centre_B, points_B = get_qr_centre(frame_B)
+
+        if centre_A is not None and centre_B is not None:
+            x_A = centre_A[0]
+            x_B = centre_B[0]
+
+            disparity = abs(x_A - x_B)
+
+            if disparity > 0:
+                distance = (focal_length_px * baseline) / disparity
+
+                print(f"QR distance: {distance:.2f} mm")
+                print(f"QR distance: {distance / 1000:.3f} m")
+
+                cv2.polylines(
+                    frame_A,
+                    [points_A.astype(int)],
+                    True,
+                    (0, 255, 0),
+                    2
+                )
+
+                cv2.polylines(
+                    frame_B,
+                    [points_B.astype(int)],
+                    True,
+                    (0, 255, 0),
+                    2
+                )
+
+                cv2.putText(
+                    frame_A,
+                    f"Distance: {distance / 1000:.3f} m",
+                    (30, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (0, 255, 0),
+                    2
+                )
+
+            else:
+                print("Disparity is zero. Cannot estimate distance.")
+
+        else:
+            print("QR code not detected in both cameras.")
+
+        combined = np.hstack((frame_A, frame_B))
+        cv2.imshow("Camera A | Camera B", combined)
+
+        key = cv2.waitKey(1) & 0xFF
+
+        if key == ord("q"):
+            break
+
+    cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    try:
+        estimate_qr_distance()
+    finally:
+        GPIO.cleanup()
