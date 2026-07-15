@@ -1,0 +1,33 @@
+from simple_pid import PID
+from numpy import random
+desired_angle_body=20 #user input
+current_angle=  #this will be read from hall sensors
+inertia_flywheel= #measue
+inertia_body=# measure
+inertia_ratio=inertia_body/inertia_flywheel
+current_angular_speed_flywheel= #hall sensors
+current_angular_speed_body= #mems imu
+max_motor_speed= #need to measure
+
+if current_angular_speed_flywheel>=max_motor_speed#need to determine the max available speed of the flywheel
+    set motor_speed=0
+else
+    pid_attitude = PID(1, 0.1, 0.05, setpoint=desired_angle_body)
+    pid_attutude.sample_time = 0.01
+    pid_speed = PID(1, 0.1, 0.05, setpoint=desired_angular_speed_flywheel)
+    pid_speed.sample_time = 0.01
+    pid_speed.output_limits = (-max_motor_speed, max_motor_speed)
+    while True:
+        current_angle_body= #imu reading
+        # Compute new output from the PID according to the systems current value
+        desired_angular_speed_body= pid_attitude(current_angle_body)
+        desired_angular_speed_flywheel= desired_angular_speed_body*inertia_ratio
+        
+        pid_speed.setpoint = desired_angular_speed_flywheel
+        motor_control = pid_speed(current_angular_speed_flywheel)
+        if motor_control > 0:
+                motor_forward(motor_control)
+
+            else:
+                motor_backward(abs(motor_control))
+end
