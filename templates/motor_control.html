@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+      <title>Motor Control</title>
+      <style>
+          body { font-family: sans-serif; max-width: 480px; margin: 40px auto; text-align: center; }
+          .directions { display: flex; gap: 10px; justify-content: center; margin: 20px 0; }
+          button { padding: 12px 20px; font-size: 16px; cursor: pointer; }
+          button.active { background: #2e7d32; color: white; }
+          input[type=range] { width: 100%; }
+          #speedLabel, #directionLabel { font-weight: bold; }
+      </style>
+  </head>
+
+  <body>
+      <h1>🔧 DC Motor Control</h1>
+      <hr>
+
+      <h2>Direction</h2>
+      <div class="directions">
+          <button id="btnBackward" onclick="setDirection('backward')">◀ Backward</button>
+          <button id="btnStop" onclick="setDirection('stop')">■ Stop</button>
+          <button id="btnForward" onclick="setDirection('forward')">Forward ▶</button>
+      </div>
+      <p>Current direction: <span id="directionLabel">stop</span></p>
+
+      <hr>
+
+      <h2>Speed</h2>
+      <input type="range" id="speedSlider" min="0" max="100" value="0" oninput="onSpeedInput(this.value)">
+      <p>Current speed: <span id="speedLabel">0</span>%</p>
+
+      <script>
+          let currentDirection = 'stop';
+          let currentSpeed = 0;
+          let sendTimer = null;
+
+          function refreshUI() {
+              document.getElementById('directionLabel').textContent = currentDirection;
+              document.getElementById('speedLabel').textContent = currentSpeed;
+              document.getElementById('speedSlider').value = currentSpeed;
+
+              ['btnBackward', 'btnStop', 'btnForward'].forEach(id => {
+                  document.getElementById(id).classList.remove('active');
+              });
+              const map = { backward: 'btnBackward', stop: 'btnStop', forward: 'btnForward' };
+              document.getElementById(map[currentDirection]).classList.add('active');
+          }
+
+          function sendCommand(direction, speed) {
+              fetch('/api/control', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ direction, speed })
+              })
+              .then(res => res.json())
+              .then(state => {
+                  currentDirection = state.direction;
+                  currentSpeed = state.speed;
+                  refreshUI();
+              });
+          }
+
+          function setDirection(direction) {
+              sendCommand(direction, currentSpeed);
+          }
+
+          function onSpeedInput(value) {
+              currentSpeed = parseInt(value, 10);
+              document.getElementById('speedLabel').textContent = currentSpeed;
+
+              // Throttle network calls while the slider is being dragged
+              clearTimeout(sendTimer);
+              sendTimer = setTimeout(() => sendCommand(currentDirection, currentSpeed), 100);
+          }
+
+          // Load initial state from the server on page load
+          fetch('/api/status')
+              .then(res => res.json())
+              .then(state => {
+                  currentDirection = state.direction;
+                  currentSpeed = state.speed;
+                  refreshUI();
+              });
+      </script>
+  </body>
+
+</html>
