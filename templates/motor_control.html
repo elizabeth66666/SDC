@@ -1,0 +1,158 @@
+<!-- Every browser page starts by declaring what kind of document this is. -->
+<!DOCTYPE html>
+<html>
+
+  <head>
+      <!-- The text that shows up in the browser tab. -->
+      <title>Motor Control</title>
+
+      <!-- CSS rules control how the page looks (colors, spacing, sizing). -->
+      <style>
+          /* Style the whole page: use a plain readable font, keep the content
+             narrow and centered in the middle of the screen, and center all text. */
+          body { font-family: sans-serif; max-width: 480px; margin: 40px auto; text-align: center; }
+
+          /* The row that holds the three direction buttons: lay them out
+             side-by-side (flex) with a gap between them, centered horizontally. */
+          .directions { display: flex; gap: 10px; justify-content: center; margin: 20px 0; }
+
+          /* Make every button a bit bigger and show a "pointer" cursor on hover
+             so it's obvious they're clickable. */
+          button { padding: 12px 20px; font-size: 16px; cursor: pointer; }
+
+          /* Whichever button matches the motor's current direction gets this
+             "active" class added by JavaScript, turning it green to highlight it. */
+          button.active { background: #2e7d32; color: white; }
+
+          /* Make the speed slider stretch across the full width of the page. */
+          input[type=range] { width: 100%; }
+
+          /* Make the numbers showing speed/direction stand out in bold. */
+          #speedLabel, #directionLabel { font-weight: bold; }
+      </style>
+  </head>
+
+  <body>
+      <!-- Page heading, shown at the top. -->
+      <h1>🔧 DC Motor Control</h1>
+      <hr>
+
+      <h2>Direction</h2>
+      <div class="directions">
+          <!-- Each button calls the setDirection() JavaScript function below,
+               passing in which direction was clicked, when the user clicks it. -->
+          <button id="btnBackward" onclick="setDirection('backward')">◀ Backward</button>
+          <button id="btnStop" onclick="setDirection('stop')">■ Stop</button>
+          <button id="btnForward" onclick="setDirection('forward')">Forward ▶</button>
+      </div>
+      <!-- This <span> is empty text that JavaScript fills in with the
+           motor's current direction ("forward", "backward", or "stop"). -->
+      <p>Current direction: <span id="directionLabel">stop</span></p>
+
+      <hr>
+
+      <h2>Speed</h2>
+      <!-- A slider the user can drag from 0 to 100. Every time it moves,
+           the browser calls onSpeedInput() with the slider's new value. -->
+      <input type="range" id="speedSlider" min="0" max="100" value="0" oninput="onSpeedInput(this.value)">
+      <!-- This <span> is filled in by JavaScript with the current speed percentage. -->
+      <p>Current speed: <span id="speedLabel">0</span>%</p>
+
+      <!-- Everything below is JavaScript: the code that runs inside the
+           browser and talks to our Flask server whenever you interact
+           with the buttons or slider. -->
+      <script>
+          // These variables remember what the page currently believes the
+          // motor's direction and speed are, so we can display them and
+          // send them along with new commands.
+          let currentDirection = 'stop';
+          let currentSpeed = 0;
+
+          // Holds a reference to a pending "send the command soon" timer,
+          // used to avoid spamming the server while the slider is dragged.
+          let sendTimer = null;
+
+          // Updates everything visible on the page to match the
+          // currentDirection/currentSpeed variables.
+          function refreshUI() {
+              // Show the current direction and speed as text.
+              document.getElementById('directionLabel').textContent = currentDirection;
+              document.getElementById('speedLabel').textContent = currentSpeed;
+
+              // Move the slider handle to match the current speed (in case
+              // it was changed by a button click rather than the slider itself).
+              document.getElementById('speedSlider').value = currentSpeed;
+
+              // Remove the green "active" highlight from all three buttons...
+              ['btnBackward', 'btnStop', 'btnForward'].forEach(id => {
+                  document.getElementById(id).classList.remove('active');
+              });
+
+              // ...then add it back only to the button matching the current
+              // direction, so the user can see at a glance what's selected.
+              const map = { backward: 'btnBackward', stop: 'btnStop', forward: 'btnForward' };
+              document.getElementById(map[currentDirection]).classList.add('active');
+          }
+
+          // Sends a direction+speed command to the Flask server and updates
+          // the page once the server confirms what it actually applied.
+          function sendCommand(direction, speed) {
+              // fetch() makes an HTTP request from the browser to our server.
+              fetch('/api/control', {
+                  method: 'POST',                              // We're sending data, not just asking for a page.
+                  headers: { 'Content-Type': 'application/json' }, // Tell the server we're sending JSON text.
+                  body: JSON.stringify({ direction, speed })   // Convert our values into a JSON string to send.
+              })
+              // .then() runs once the server responds. res.json() reads the
+              // server's reply and parses it from JSON text back into an object.
+              .then(res => res.json())
+              .then(state => {
+                  // Update our local variables with whatever the server says
+                  // is actually true (it may adjust/clamp our values), then
+                  // redraw the page to match.
+                  currentDirection = state.direction;
+                  currentSpeed = state.speed;
+                  refreshUI();
+              });
+          }
+
+          // Called when a direction button is clicked. Keeps the current
+          // speed the same, just changes the direction.
+          function setDirection(direction) {
+              sendCommand(direction, currentSpeed);
+          }
+
+          // Called continuously while the user drags the speed slider.
+          function onSpeedInput(value) {
+              // The slider gives us a value as text; parseInt turns it into
+              // an actual whole number we can use.
+              currentSpeed = parseInt(value, 10);
+
+              // Update the on-screen number immediately, even before the
+              // server confirms, so the UI feels instantly responsive.
+              document.getElementById('speedLabel').textContent = currentSpeed;
+
+              // Throttle network calls while the slider is being dragged:
+              // cancel any previously scheduled send, then schedule a new
+              // one 100 milliseconds from now. If the user keeps dragging,
+              // this keeps getting cancelled and rescheduled, so we only
+              // actually contact the server once the user pauses briefly -
+              // this avoids flooding the Pi with requests every pixel of drag.
+              clearTimeout(sendTimer);
+              sendTimer = setTimeout(() => sendCommand(currentDirection, currentSpeed), 100);
+          }
+
+          // As soon as the page finishes loading, ask the server what the
+          // motor is currently doing, so the page shows accurate info
+          // instead of always starting back at "stop" / 0%.
+          fetch('/api/status')
+              .then(res => res.json())
+              .then(state => {
+                  currentDirection = state.direction;
+                  currentSpeed = state.speed;
+                  refreshUI();
+              });
+      </script>
+  </body>
+
+</html>
