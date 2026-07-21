@@ -24,6 +24,8 @@ Requires: `pip install spidev` and SPI enabled via `raspi-config`.
 # The block above is the module docstring; it documents the file's purpose,
 # the wiring needed, and setup requirements.
 
+import os
+# Standard library module used to build an absolute path for the database.
 import sqlite3
 # Standard library module for reading/writing the local SQLite database.
 import time
@@ -35,8 +37,11 @@ import spidev
 # Third-party module that gives Python access to the Pi's /dev/spidev*
 # kernel SPI device nodes.
 
-DB_PATH = "telemetry.db"
-# Path to the SQLite database file, created in the working directory.
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "telemetry.db")
+# Absolute path to the SQLite database file, anchored to this script's own
+# folder (e.g. /home/pi/SDC/telemetry.db) rather than the shell's current
+# working directory, so it lands in the same place no matter how/where the
+# script is launched from (cron, systemd, an SSH session, another script).
 
 
 class PmodTC1Fault(Exception):
