@@ -4,8 +4,9 @@
 pmod_tc1_demo.py -- Raspberry Pi port of Digilent's PmodTC1 demo (main.c).
 
 Reads temperature from a Digilent PmodTC1 (built around the Maxim MAX31855
-thermocouple-to-digital converter) over the Raspberry Pi's hardware SPI and
-streams it to the console in Fahrenheit and Celsius, twice per second.
+thermocouple-to-digital converter) over the Raspberry Pi's hardware SPI,
+collects a reading in Celsius once per minute, prints it to the console,
+and appends it to telemetry_log.txt via logger.log().
 
 Wiring (PmodTC1 SPI pins -> Raspberry Pi 40-pin header, using spidev 0.0):
     CS  -> GPIO8  / CE0  (pin 24)
@@ -28,6 +29,10 @@ import time
 import spidev
 # Third-party module that gives Python access to the Pi's /dev/spidev*
 # kernel SPI device nodes.
+
+from logger import log
+# Repo helper (logger.py) that appends a timestamped dict of readings to
+# telemetry_log.txt, used here to persist each Celsius reading.
 
 
 class PmodTC1Fault(Exception):
@@ -108,16 +113,9 @@ class PmodTC1:
         return (data[0] << 24) | (data[1] << 16) | (data[2] << 8) | data[3]
         # Combine the 4 bytes (MSB first) into one 32-bit value.
 
-    @staticmethod
-    def temp_c_to_f(celsius):
-        # Utility conversion function; doesn't need "self" since it has no
-        # dependency on instance state.
-        return celsius * 9.0 / 5.0 + 32.0
-        # Standard Celsius-to-Fahrenheit formula.
-
 
 def demo_run(device):
-    # Runs the main read/print loop, given an already-open PmodTC1 device.
+    # Runs the main read/log loop, given an already-open PmodTC1 device.
     print("Starting Pmod TC1 Demo...")
     # Print a startup banner, mirroring the original C demo's message.
     while True:
@@ -125,16 +123,16 @@ def demo_run(device):
         try:
             celsius = device.get_temp_c()
             # Read the current temperature in Celsius; may raise PmodTC1Fault.
-            fahrenheit = PmodTC1.temp_c_to_f(celsius)
-            # Convert the Celsius reading to Fahrenheit for display.
-            print(f"Temperature: {fahrenheit:.6f} deg F   {celsius:.6f} deg C")
-            # Print both readings, formatted to 6 decimal places.
+            print(f"Temperature: {celsius:.6f} deg C")
+            # Print the reading, formatted to 6 decimal places.
+            log({"temperature_c": celsius})
+            # Append the reading to telemetry_log.txt with a timestamp.
         except PmodTC1Fault as fault:
             # Catch a thermocouple fault instead of letting it crash the loop.
             print(f"Thermocouple fault: {fault}")
             # Report the fault message to the console.
-        time.sleep(0.5)
-        # Wait half a second before the next reading (twice per second).
+        time.sleep(60)
+        # Wait a full minute before the next reading (once per minute).
 
 
 def main():
