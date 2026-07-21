@@ -6,7 +6,8 @@ pmod_tc1_demo.py -- Raspberry Pi port of Digilent's PmodTC1 demo (main.c).
 Reads temperature from a Digilent PmodTC1 (built around the Maxim MAX31855
 thermocouple-to-digital converter) over the Raspberry Pi's hardware SPI,
 collects a reading in Celsius once per minute, prints it to the console,
-and appends it to telemetry_log.txt via logger.log().
+and stores it in a local SQLite database (telemetry.db) so a future UI
+can query recent/live readings without re-parsing a log file.
 
 Wiring (PmodTC1 SPI pins -> Raspberry Pi 40-pin header, using spidev 0.0):
     CS  -> GPIO8  / CE0  (pin 24)
@@ -23,16 +24,19 @@ Requires: `pip install spidev` and SPI enabled via `raspi-config`.
 # The block above is the module docstring; it documents the file's purpose,
 # the wiring needed, and setup requirements.
 
+import sqlite3
+# Standard library module for reading/writing the local SQLite database.
 import time
 # Standard library module used for time.sleep() to pace the read loop.
+from datetime import datetime
+# Standard library module used to timestamp each stored reading.
 
 import spidev
 # Third-party module that gives Python access to the Pi's /dev/spidev*
 # kernel SPI device nodes.
 
-from logger import log
-# Repo helper (logger.py) that appends a timestamped dict of readings to
-# telemetry_log.txt, used here to persist each Celsius reading.
+DB_PATH = "telemetry.db"
+# Path to the SQLite database file, created in the working directory.
 
 
 class PmodTC1Fault(Exception):
@@ -114,8 +118,42 @@ class PmodTC1:
         # Combine the 4 bytes (MSB first) into one 32-bit value.
 
 
-def demo_run(device):
-    # Runs the main read/log loop, given an already-open PmodTC1 device.
+def init_db(db_path=DB_PATH):
+    # Opens (creating if necessary) the SQLite file and ensures the
+    # readings table exists.
+    conn = sqlite3.connect(db_path)
+    # Connect to the database file, creating it on first run.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS thermocouple_readings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            temperature_c REAL NOT NULL
+        )
+        """
+    )
+    # Create the table on first run only; later runs reuse the existing one.
+    conn.commit()
+    # Persist the table creation to disk.
+    return conn
+    # Hand the open connection back to the caller.
+
+
+def store_reading(conn, celsius):
+    # Inserts one timestamped Celsius reading into the database.
+    conn.execute(
+        "INSERT INTO thermocouple_readings (timestamp, temperature_c) VALUES (?, ?)",
+        (datetime.now().isoformat(), celsius),
+    )
+    # Parameterized insert (avoids SQL injection) with an ISO-8601 timestamp.
+    conn.commit()
+    # Write the new row to disk immediately, so a UI reading the same file
+    # sees it right away.
+
+
+def demo_run(device, conn):
+    # Runs the main read/store loop, given an open PmodTC1 device and an
+    # open SQLite connection.
     print("Starting Pmod TC1 Demo...")
     # Print a startup banner, mirroring the original C demo's message.
     while True:
@@ -125,8 +163,8 @@ def demo_run(device):
             # Read the current temperature in Celsius; may raise PmodTC1Fault.
             print(f"Temperature: {celsius:.6f} deg C")
             # Print the reading, formatted to 6 decimal places.
-            log({"temperature_c": celsius})
-            # Append the reading to telemetry_log.txt with a timestamp.
+            store_reading(conn, celsius)
+            # Insert the reading into telemetry.db with a timestamp.
         except PmodTC1Fault as fault:
             # Catch a thermocouple fault instead of letting it crash the loop.
             print(f"Thermocouple fault: {fault}")
@@ -136,16 +174,23 @@ def demo_run(device):
 
 
 def main():
-    # Entry point: opens the device, runs the demo, and cleans up on exit.
-    with PmodTC1(bus=0, device=0) as device:
-        # Open spidev0.0 and guarantee it's closed when this block ends.
-        try:
-            demo_run(device)
-            # Run the read/print loop using the opened device.
-        except KeyboardInterrupt:
-            # Catch Ctrl+C so it exits cleanly instead of printing a traceback.
-            print("\nExiting.")
-            # Print a friendly exit message before the program ends.
+    # Entry point: opens the device and database, runs the demo, and
+    # cleans both up on exit.
+    conn = init_db()
+    # Open (or create) telemetry.db and ensure its table exists.
+    try:
+        with PmodTC1(bus=0, device=0) as device:
+            # Open spidev0.0 and guarantee it's closed when this block ends.
+            try:
+                demo_run(device, conn)
+                # Run the read/store loop using the opened device and DB.
+            except KeyboardInterrupt:
+                # Catch Ctrl+C so it exits cleanly instead of printing a traceback.
+                print("\nExiting.")
+                # Print a friendly exit message before the program ends.
+    finally:
+        conn.close()
+        # Always close the database connection, even if an error occurred.
 
 
 if __name__ == "__main__":
